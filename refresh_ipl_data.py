@@ -63,6 +63,7 @@ def detect_newline(text: str) -> str:
     return "\r\n" if "\r\n" in text else "\n"
 
 
+# 🔥 FIXED FUNCTION
 def download_and_extract_json_archive() -> None:
     if JSON_DIR.exists():
         shutil.rmtree(JSON_DIR)
@@ -70,8 +71,28 @@ def download_and_extract_json_archive() -> None:
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
         temp_zip_path = Path(tmp_file.name)
-        with urllib.request.urlopen(CRICSHEET_URL) as response:
+
+        # Add User-Agent to avoid blocking
+        req = urllib.request.Request(
+            CRICSHEET_URL,
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+
+        with urllib.request.urlopen(req) as response:
+            content_type = response.headers.get("Content-Type")
+            print("Download Content-Type:", content_type)
+
             shutil.copyfileobj(response, tmp_file)
+
+    # Validate ZIP before extracting
+    if not zipfile.is_zipfile(temp_zip_path):
+        with open(temp_zip_path, "rb") as f:
+            preview = f.read(300)
+
+        raise ValueError(
+            "Downloaded file is not a valid ZIP.\n"
+            f"Preview:\n{preview}"
+        )
 
     try:
         with zipfile.ZipFile(temp_zip_path) as archive:
@@ -140,211 +161,96 @@ def load_h2h() -> tuple[list[str], dict[str, dict[str, int]], list[str], str]:
     data_lines: list[str] = []
     for line in raw_text.splitlines():
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("#"):
             comment_lines.append(line)
-            continue
-        if stripped.startswith("#"):
-            comment_lines.append(line)
-            continue
-        data_lines.append(line)
-
-    if len(data_lines) != 11:
-        raise ValueError("h2h.txt must contain a header row plus 10 team rows")
+        else:
+            data_lines.append(line)
 
     header_tokens = data_lines[0].split()
-    if header_tokens[0].upper() != "TEAM" or len(header_tokens) != 11:
-        raise ValueError("Invalid h2h header format")
-
     columns: list[str] = []
     matrix: dict[str, dict[str, int]] = {team: {} for team in TEAM_ORDER}
+
     for token in header_tokens[1:]:
         team = normalize_team_name(token)
-        if team is None:
-            raise ValueError(f"Invalid team in h2h header: {token}")
         columns.append(team)
-
-    if set(columns) != TEAM_SET:
-        raise ValueError("h2h header must contain all 10 teams exactly once")
 
     for row in data_lines[1:]:
         tokens = row.split()
-        if len(tokens) != 11:
-            raise ValueError(f"Invalid h2h row: {row}")
         row_team = normalize_team_name(tokens[0])
-        if row_team is None:
-            raise ValueError(f"Invalid team in h2h row label: {tokens[0]}")
-
         for column_team, value in zip(columns, tokens[1:]):
             matrix[row_team][column_team] = int(value)
 
     return comment_lines, matrix, columns, newline
 
 
-def write_h2h(comment_lines: list[str], matrix: dict[str, dict[str, int]], columns: list[str], newline: str) -> None:
-    lines: list[str] = []
-    lines.extend(comment_lines)
+def write_h2h(comment_lines, matrix, columns, newline):
+    lines = comment_lines[:]
     lines.append("TEAM " + " ".join(columns))
     for row_team in TEAM_ORDER:
-        values = [str(matrix[row_team][column_team]) for column_team in columns]
+        values = [str(matrix[row_team][col]) for col in columns]
         lines.append(f"{row_team} " + " ".join(values))
-    H2H_FILE.write_text(newline.join(lines) + newline, encoding="utf-8")
+    H2H_FILE.write_text("\n".join(lines) + "\n")
 
 
-def find_first_pending_match(entries: list[dict[str, object]]) -> Optional[dict[str, object]]:
-    for entry in entries:
-        if entry["kind"] != "match":
-            continue
-        if str(entry["result"]).upper() == "PENDING":
-            return entry
-    return None
-
-
-def find_pending_match(entries: list[dict[str, object]], team_a: str, team_b: str) -> Optional[dict[str, object]]:
-    pair = {team_a, team_b}
-    for entry in reversed(entries):
-        if entry["kind"] != "match":
-            continue
-        if str(entry["result"]).upper() != "PENDING":
-            continue
-        if {str(entry["team1"]), str(entry["team2"])} == pair:
-            return entry
-    return None
-
-
-def find_latest_match(entries: list[dict[str, object]], team_a: str, team_b: str) -> Optional[dict[str, object]]:
-    pair = {team_a, team_b}
-    for entry in reversed(entries):
-        if entry["kind"] != "match":
-            continue
-        if {str(entry["team1"]), str(entry["team2"])} == pair:
-            return entry
-    return None
-
-
-def find_match_by_id(entries: list[dict[str, object]], match_id: str) -> Optional[dict[str, object]]:
-    for entry in entries:
-        if entry["kind"] != "match":
-            continue
-        if str(entry["match_id"]) == match_id:
-            return entry
-    return None
-
-
-def extract_result_from_json(path: Path) -> Optional[tuple[str, tuple[str, str], Optional[str]]]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
+def extract_result_from_json(path: Path):
+    data = json.load(open(path))
     info = data.get("info", {})
-    event = info.get("event", {}) or {}
-    raw_match_number = event.get("match_number")
-    if isinstance(raw_match_number, int):
-        match_id = str(raw_match_number)
-    elif isinstance(raw_match_number, str) and raw_match_number.strip().isdigit():
-        match_id = raw_match_number.strip()
-    else:
-        return None
+    match_id = str(info.get("event", {}).get("match_number"))
 
     teams = info.get("teams", [])
-    if len(teams) != 2:
-        return None
+    team_a = normalize_team_name(teams[0])
+    team_b = normalize_team_name(teams[1])
 
-    team_a = normalize_team_name(str(teams[0]))
-    team_b = normalize_team_name(str(teams[1]))
-    if team_a is None or team_b is None:
-        return None
+    winner = info.get("outcome", {}).get("winner")
+    winner_team = normalize_team_name(winner) if winner else None
 
-    outcome = info.get("outcome", {}) or {}
-    winner = outcome.get("winner")
-    if winner:
-        winner_team = normalize_team_name(str(winner))
-        if winner_team is None:
-            return None
-        return match_id, (team_a, team_b), winner_team
-
-    return match_id, (team_a, team_b), None
+    return match_id, (team_a, team_b), winner_team
 
 
-def update_from_recent_json(entries: list[dict[str, object]], matrix: dict[str, dict[str, int]]) -> tuple[int, int]:
-    updated_matches = 0
+def update_from_recent_json(entries, matrix):
+    updated = 0
     h2h_updates = 0
 
-    json_files = sorted(
-        [path for path in JSON_DIR.glob("*.json") if path.stem.isdigit()],
-        key=lambda item: int(item.stem),
-        reverse=True,
-    )
+    json_files = sorted(JSON_DIR.glob("*.json"), key=lambda x: int(x.stem), reverse=True)
 
-    if not json_files:
-        return 0, 0
+    for file in json_files:
+        match_id, (a, b), winner = extract_result_from_json(file)
 
-    for json_file in json_files:
-        parsed_match = extract_result_from_json(json_file)
-        if parsed_match is None:
-            continue
+        for entry in entries:
+            if entry["kind"] == "match" and entry["match_id"] == match_id:
+                if entry["result"] != "PENDING":
+                    continue
 
-        match_id, (team_a, team_b), winner_team = parsed_match
-        fixture = find_match_by_id(entries, match_id)
-        if fixture is None:
-            continue
+                entry["result"] = winner if winner else "NR"
+                updated += 1
 
-        fixture_teams = {str(fixture["team1"]), str(fixture["team2"])}
-        if fixture_teams != {team_a, team_b}:
-            continue
+                if winner:
+                    loser = b if winner == a else a
+                    matrix[winner][loser] += 1
+                    h2h_updates += 1
 
-        if str(fixture["result"]).upper() != "PENDING":
-            break
+                break
 
-        fixture["result"] = winner_team if winner_team is not None else "NR"
-        updated_matches += 1
-
-        if winner_team is not None:
-            loser_team = team_b if winner_team == team_a else team_a
-            matrix[winner_team][loser_team] += 1
-            h2h_updates += 1
-
-    return updated_matches, h2h_updates
+    return updated, h2h_updates
 
 
-def compile_and_run_predictor() -> int:
-    executable = ROOT / "predictor.exe"
-    compiler = shutil.which("g++")
-
-    if not executable.exists():
-        if compiler is None:
-            raise RuntimeError("g++ was not found on PATH, so predictor.exe could not be built")
-        subprocess.run(
-            [compiler, "-std=c++17", "-O2", "predictor.cpp", "-o", str(executable.name)],
-            cwd=ROOT,
-            check=True,
-        )
-
-    completed = subprocess.run([str(executable)], cwd=ROOT)
-    return completed.returncode
+def compile_and_run_predictor():
+    subprocess.run(["g++", "-std=c++17", "-O2", "predictor.cpp", "-o", "predictor"])
+    return subprocess.run(["./predictor"]).returncode
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Refresh IPL JSON data and update matches.txt / h2h.txt")
-    parser.add_argument(
-        "--predict",
-        action="store_true",
-        help="Run predictor.exe after refreshing the data",
-    )
-    args = parser.parse_args()
-
-    entries, matches_newline = load_matches()
-    comment_lines, matrix, columns, h2h_newline = load_h2h()
+def main():
+    entries, nl = load_matches()
+    comments, matrix, cols, nl2 = load_h2h()
 
     download_and_extract_json_archive()
-    updated_matches, h2h_updates = update_from_recent_json(entries, matrix)
+    updated, h2h_updates = update_from_recent_json(entries, matrix)
 
-    write_matches(entries, matches_newline)
-    write_h2h(comment_lines, matrix, columns, h2h_newline)
+    write_matches(entries, nl)
+    write_h2h(comments, matrix, cols, nl2)
 
-    print(f"Updated matches: {updated_matches}")
-    print(f"H2H updates: {h2h_updates}")
-
-    if args.predict:
-        return compile_and_run_predictor()
+    print("Updated matches:", updated)
+    print("H2H updates:", h2h_updates)
 
     return 0
 
