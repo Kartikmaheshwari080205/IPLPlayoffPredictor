@@ -1,0 +1,64 @@
+name: Nightly Predictor And Publish
+
+on:
+  schedule:
+    # 19:30 UTC = 01:00 IST
+    - cron: "30 19 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout backend repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build predictor for Linux runner
+        run: g++ -std=c++17 -O2 predictor.cpp -o predictor
+
+      - name: Run nightly orchestration
+        run: python nightly_job.py --threshold 27
+
+      - name: Build frontend payload
+        run: python build_frontend_payload.py --input probabilities.txt --output playoff_snapshot.json --threshold 27
+
+      - name: Clone frontend repo
+        env:
+          FRONTEND_REPO: ${{ secrets.FRONTEND_REPO }}
+          FRONTEND_REPO_PAT: ${{ secrets.FRONTEND_REPO_PAT }}
+        run: |
+          if [ -z "$FRONTEND_REPO" ]; then
+            echo "Missing secret: FRONTEND_REPO (owner/repo)"
+            exit 1
+          fi
+          if [ -z "$FRONTEND_REPO_PAT" ]; then
+            echo "Missing secret: FRONTEND_REPO_PAT"
+            exit 1
+          fi
+          git clone https://x-access-token:${FRONTEND_REPO_PAT}@github.com/${FRONTEND_REPO}.git frontend-repo
+
+      - name: Commit and push payload to frontend repo
+        env:
+          FRONTEND_BRANCH: ${{ vars.FRONTEND_BRANCH || 'main' }}
+          FRONTEND_DATA_PATH: ${{ vars.FRONTEND_DATA_PATH || 'src/data/playoff_snapshot.json' }}
+        run: |
+          set -e
+          cd frontend-repo
+          git checkout "$FRONTEND_BRANCH"
+          mkdir -p "$(dirname "$FRONTEND_DATA_PATH")"
+          cp ../playoff_snapshot.json "$FRONTEND_DATA_PATH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FRONTEND_DATA_PATH"
+          if git diff --cached --quiet; then
+            echo "No frontend payload changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: nightly playoff snapshot update"
+          git push origin "$FRONTEND_BRANCH"

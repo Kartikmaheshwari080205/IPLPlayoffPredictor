@@ -108,6 +108,86 @@ Each run prints:
 - Final playoff qualification probabilities
 - `Time taken: <ms> ms`
 
+## API Endpoint
+
+A lightweight API server is available in `api_server.py`.
+
+Start it from project root:
+
+```powershell
+python api_server.py
+```
+
+The server listens on port `8000` by default (override with environment variable `PORT`).
+
+Available endpoints:
+
+- `GET /health` -> simple health check
+- `GET /probabilities` -> returns latest snapshot from `probabilities.txt`
+
+`/probabilities` behavior:
+
+- If `remainingMatches > 27`, returns status `unfeasible` with message `unfeasible to compute at the moment`
+- Otherwise returns:
+  - `teamOrder`
+  - `probabilities` (same fixed order as predictor/temp)
+  - `mappedProbabilities` (team -> probability)
+  - `lastUpdated`, `remainingMatches`, `status`
+
+## Nightly Orchestration
+
+Use `nightly_job.py` to run backend workflow in one step:
+
+1. Run `refresh_ipl_data.py`
+2. Count remaining matches from `matches.txt`
+3. If `remainingMatches > 27`, write unfeasible snapshot to `probabilities.txt`
+4. Otherwise run predictor executable to compute and store probabilities
+
+Run manually:
+
+```powershell
+python nightly_job.py
+```
+
+Optional threshold override:
+
+```powershell
+python nightly_job.py --threshold 27
+```
+
+For deployment, schedule this script at 1am server time (Task Scheduler on Windows or cron/systemd timer on Linux).
+
+## GitHub Actions Nightly Publish
+
+You can run the nightly backend flow on GitHub Actions and publish the latest snapshot directly into your frontend repo.
+
+Workflow file:
+
+- `.github/workflows/nightly-publish-frontend.yml`
+
+What it does nightly:
+
+1. Builds `predictor.cpp` on Ubuntu runner
+2. Runs `nightly_job.py`
+3. Builds frontend payload JSON via `build_frontend_payload.py`
+4. Clones frontend repo and updates payload file
+5. Commits and pushes only if content changed
+
+Required GitHub Secrets (in backend repo):
+
+- `FRONTEND_REPO`: `<owner>/<repo>` for frontend repository
+- `FRONTEND_REPO_PAT`: Personal access token with repo write permission to frontend repository
+
+Optional GitHub Variables (in backend repo):
+
+- `FRONTEND_BRANCH` (default: `main`)
+- `FRONTEND_DATA_PATH` (default: `src/data/playoff_snapshot.json`)
+
+Schedule:
+
+- Default cron is `30 19 * * *` (1:00 AM IST)
+- Adjust cron if your timezone differs
+
 ## How Probability Is Computed
 
 For team A vs team B:
