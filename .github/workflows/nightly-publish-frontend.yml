@@ -50,7 +50,12 @@ jobs:
         run: |
           set -e
           cd frontend-repo
-          git checkout "$FRONTEND_BRANCH"
+          if git ls-remote --exit-code --heads origin "$FRONTEND_BRANCH" >/dev/null 2>&1; then
+            git checkout -B "$FRONTEND_BRANCH" "origin/$FRONTEND_BRANCH"
+          else
+            echo "Branch '$FRONTEND_BRANCH' not found on remote. Creating it."
+            git checkout --orphan "$FRONTEND_BRANCH"
+          fi
           mkdir -p "$(dirname "$FRONTEND_DATA_PATH")"
           cp ../playoff_snapshot.json "$FRONTEND_DATA_PATH"
           git config user.name "github-actions[bot]"
@@ -61,4 +66,4 @@ jobs:
             exit 0
           fi
           git commit -m "chore: nightly playoff snapshot update"
-          git push origin "$FRONTEND_BRANCH"
+          git push -u origin "$FRONTEND_BRANCH"
