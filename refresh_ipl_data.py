@@ -63,7 +63,7 @@ def detect_newline(text: str) -> str:
     return "\r\n" if "\r\n" in text else "\n"
 
 
-# 🔥 FIXED FUNCTION
+# ✅ FIXED DOWNLOAD FUNCTION
 def download_and_extract_json_archive() -> None:
     if JSON_DIR.exists():
         shutil.rmtree(JSON_DIR)
@@ -72,7 +72,6 @@ def download_and_extract_json_archive() -> None:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
         temp_zip_path = Path(tmp_file.name)
 
-        # Add User-Agent to avoid blocking
         req = urllib.request.Request(
             CRICSHEET_URL,
             headers={"User-Agent": "Mozilla/5.0"}
@@ -84,7 +83,6 @@ def download_and_extract_json_archive() -> None:
 
             shutil.copyfileobj(response, tmp_file)
 
-    # Validate ZIP before extracting
     if not zipfile.is_zipfile(temp_zip_path):
         with open(temp_zip_path, "rb") as f:
             preview = f.read(300)
@@ -97,114 +95,92 @@ def download_and_extract_json_archive() -> None:
     try:
         with zipfile.ZipFile(temp_zip_path) as archive:
             for member in archive.namelist():
-                if not member.lower().endswith(".json"):
-                    continue
-                archive.extract(member, JSON_DIR)
+                if member.lower().endswith(".json"):
+                    archive.extract(member, JSON_DIR)
     finally:
         temp_zip_path.unlink(missing_ok=True)
 
 
 def load_matches() -> tuple[list[dict[str, object]], str]:
-    if not MATCHES_FILE.exists():
-        raise FileNotFoundError(f"Missing matches file: {MATCHES_FILE}")
-
     raw_text = MATCHES_FILE.read_text(encoding="utf-8")
     newline = detect_newline(raw_text)
-    entries: list[dict[str, object]] = []
+
+    entries = []
     for line in raw_text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             entries.append({"kind": "passthrough", "line": line})
             continue
 
-        parts = stripped.split()
-        if len(parts) != 4:
-            raise ValueError(f"Invalid matches.txt line: {line}")
-
-        team1 = normalize_team_name(parts[0])
-        team2 = normalize_team_name(parts[1])
-        if team1 is None or team2 is None:
-            raise ValueError(f"Invalid team in matches.txt line: {line}")
-
-        entries.append(
-            {
-                "kind": "match",
-                "team1": team1,
-                "team2": team2,
-                "match_id": parts[2],
-                "result": parts[3],
-            }
-        )
+        t1, t2, mid, res = stripped.split()
+        entries.append({
+            "kind": "match",
+            "team1": normalize_team_name(t1),
+            "team2": normalize_team_name(t2),
+            "match_id": mid,
+            "result": res
+        })
 
     return entries, newline
 
 
-def write_matches(entries: list[dict[str, object]], newline: str) -> None:
-    lines: list[str] = []
-    for entry in entries:
-        if entry["kind"] == "passthrough":
-            lines.append(str(entry["line"]))
+def write_matches(entries, newline):
+    lines = []
+    for e in entries:
+        if e["kind"] == "passthrough":
+            lines.append(e["line"])
         else:
-            lines.append(
-                f'{entry["team1"]} {entry["team2"]} {entry["match_id"]} {entry["result"]}'
-            )
-    MATCHES_FILE.write_text(newline.join(lines) + newline, encoding="utf-8")
+            lines.append(f"{e['team1']} {e['team2']} {e['match_id']} {e['result']}")
+    MATCHES_FILE.write_text(newline.join(lines) + newline)
 
 
-def load_h2h() -> tuple[list[str], dict[str, dict[str, int]], list[str], str]:
-    if not H2H_FILE.exists():
-        raise FileNotFoundError(f"Missing h2h file: {H2H_FILE}")
+def load_h2h():
+    raw = H2H_FILE.read_text()
+    lines = raw.splitlines()
 
-    raw_text = H2H_FILE.read_text(encoding="utf-8")
-    newline = detect_newline(raw_text)
-    comment_lines: list[str] = []
-    data_lines: list[str] = []
-    for line in raw_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            comment_lines.append(line)
+    comments = []
+    data = []
+    for l in lines:
+        if not l.strip() or l.startswith("#"):
+            comments.append(l)
         else:
-            data_lines.append(line)
+            data.append(l)
 
-    header_tokens = data_lines[0].split()
-    columns: list[str] = []
-    matrix: dict[str, dict[str, int]] = {team: {} for team in TEAM_ORDER}
+    header = data[0].split()[1:]
+    matrix = {t: {} for t in TEAM_ORDER}
 
-    for token in header_tokens[1:]:
-        team = normalize_team_name(token)
-        columns.append(team)
+    for row in data[1:]:
+        parts = row.split()
+        rteam = normalize_team_name(parts[0])
+        for cteam, val in zip(header, parts[1:]):
+            matrix[rteam][normalize_team_name(cteam)] = int(val)
 
-    for row in data_lines[1:]:
-        tokens = row.split()
-        row_team = normalize_team_name(tokens[0])
-        for column_team, value in zip(columns, tokens[1:]):
-            matrix[row_team][column_team] = int(value)
-
-    return comment_lines, matrix, columns, newline
+    return comments, matrix, header, "\n"
 
 
-def write_h2h(comment_lines, matrix, columns, newline):
-    lines = comment_lines[:]
-    lines.append("TEAM " + " ".join(columns))
-    for row_team in TEAM_ORDER:
-        values = [str(matrix[row_team][col]) for col in columns]
-        lines.append(f"{row_team} " + " ".join(values))
+def write_h2h(comments, matrix, cols, newline):
+    lines = comments[:]
+    lines.append("TEAM " + " ".join(cols))
+    for t in TEAM_ORDER:
+        row = [str(matrix[t][c]) for c in cols]
+        lines.append(f"{t} " + " ".join(row))
     H2H_FILE.write_text("\n".join(lines) + "\n")
 
 
 def extract_result_from_json(path: Path):
     data = json.load(open(path))
     info = data.get("info", {})
+
     match_id = str(info.get("event", {}).get("match_number"))
 
     teams = info.get("teams", [])
-    team_a = normalize_team_name(teams[0])
-    team_b = normalize_team_name(teams[1])
+    a = normalize_team_name(teams[0])
+    b = normalize_team_name(teams[1])
 
     winner = info.get("outcome", {}).get("winner")
-    winner_team = normalize_team_name(winner) if winner else None
+    winner = normalize_team_name(winner) if winner else None
 
-    return match_id, (team_a, team_b), winner_team
+    return match_id, (a, b), winner
 
 
 def update_from_recent_json(entries, matrix):
@@ -213,8 +189,14 @@ def update_from_recent_json(entries, matrix):
 
     json_files = sorted(JSON_DIR.glob("*.json"), key=lambda x: int(x.stem), reverse=True)
 
+    seen_any = False
+
     for file in json_files:
         match_id, (a, b), winner = extract_result_from_json(file)
+
+        if match_id == "1" and seen_any:
+            break
+        seen_any = True
 
         for entry in entries:
             if entry["kind"] == "match" and entry["match_id"] == match_id:
@@ -228,7 +210,6 @@ def update_from_recent_json(entries, matrix):
                     loser = b if winner == a else a
                     matrix[winner][loser] += 1
                     h2h_updates += 1
-
                 break
 
     return updated, h2h_updates
@@ -244,13 +225,13 @@ def main():
     comments, matrix, cols, nl2 = load_h2h()
 
     download_and_extract_json_archive()
-    updated, h2h_updates = update_from_recent_json(entries, matrix)
+    updated, h2h = update_from_recent_json(entries, matrix)
 
     write_matches(entries, nl)
     write_h2h(comments, matrix, cols, nl2)
 
     print("Updated matches:", updated)
-    print("H2H updates:", h2h_updates)
+    print("H2H updates:", h2h)
 
     return 0
 
