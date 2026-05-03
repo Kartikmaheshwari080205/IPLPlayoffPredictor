@@ -44,12 +44,13 @@ def parse_snapshot(path: Path) -> dict[str, Any]:
     }
 
 
-def parse_matches(path: Path) -> list[dict[str, Any]]:
+def parse_matches(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     if not path.exists():
         raise FileNotFoundError(f"matches file not found: {path}")
 
     points = {team: 0 for team in TEAM_ORDER}
     matches_played = {team: 0 for team in TEAM_ORDER}
+    last_completed_match: dict[str, Any] | None = None
 
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -70,6 +71,12 @@ def parse_matches(path: Path) -> list[dict[str, Any]]:
 
         if result == "PENDING":
             continue
+
+        last_completed_match = {
+            "matchId": _coerce_match_id(_match_id),
+            "team1": team1,
+            "team2": team2,
+        }
 
         matches_played[team1] += 1
         matches_played[team2] += 1
@@ -93,7 +100,14 @@ def parse_matches(path: Path) -> list[dict[str, Any]]:
         for team in TEAM_ORDER
     ]
     rows.sort(key=lambda row: (-row["points"], TEAM_INDEX[row["team"]]))
-    return rows
+    return rows, last_completed_match
+
+
+def _coerce_match_id(raw_match_id: str) -> Any:
+    try:
+        return int(raw_match_id)
+    except ValueError:
+        return raw_match_id
 
 
 def parse_h2h(path: Path) -> dict[str, Any]:
@@ -133,7 +147,7 @@ def parse_h2h(path: Path) -> dict[str, Any]:
 def build_payload(snapshot: dict[str, Any], threshold: int, matches_path: Path, h2h_path: Path) -> dict[str, Any]:
     remaining_matches = int(snapshot["remainingMatches"])
     probabilities = [float(value) for value in snapshot.get("probabilities", [])]
-    points_table = parse_matches(matches_path)
+    points_table, last_completed_match = parse_matches(matches_path)
     h2h = parse_h2h(h2h_path)
 
     base = {
@@ -142,6 +156,7 @@ def build_payload(snapshot: dict[str, Any], threshold: int, matches_path: Path, 
         "teamOrder": TEAM_ORDER,
         "pointsTable": points_table,
         "h2h": h2h,
+        "lastCompletedMatch": last_completed_match,
     }
 
     if remaining_matches > threshold or snapshot.get("status") == "unfeasible":

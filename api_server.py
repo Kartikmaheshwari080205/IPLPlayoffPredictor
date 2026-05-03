@@ -8,6 +8,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 PROBABILITY_FILE = ROOT / "probabilities.txt"
+MATCHES_FILE = ROOT / "matches.txt"
 TEAM_ORDER = ["MI", "CSK", "RCB", "KKR", "RR", "DC", "PBKS", "SRH", "GT", "LSG"]
 MAX_FEASIBLE_REMAINING_MATCHES = 27
 
@@ -77,10 +78,46 @@ def parse_snapshot() -> dict[str, Any]:
     }
 
 
+def parse_last_completed_match() -> dict[str, Any] | None:
+    if not MATCHES_FILE.exists():
+        return None
+
+    last_completed_match: dict[str, Any] | None = None
+    for raw_line in MATCHES_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+
+        team1, team2, match_id, result = parts[:4]
+        if result.upper() == "PENDING":
+            continue
+
+        last_completed_match = {
+            "matchId": _coerce_match_id(match_id),
+            "team1": team1.upper(),
+            "team2": team2.upper(),
+        }
+
+    return last_completed_match
+
+
+def _coerce_match_id(raw_match_id: str) -> Any:
+    try:
+        return int(raw_match_id)
+    except ValueError:
+        return raw_match_id
+
+
 def build_response_payload() -> tuple[dict[str, Any], int]:
     snapshot = parse_snapshot()
+    last_completed_match = parse_last_completed_match()
 
     if snapshot["status"] in {"unavailable", "invalid"}:
+        snapshot["lastCompletedMatch"] = last_completed_match
         return snapshot, 503
 
     remaining_matches = snapshot.get("remainingMatches")
@@ -96,6 +133,7 @@ def build_response_payload() -> tuple[dict[str, Any], int]:
             "message": "unfeasible to compute at the moment",
             "lastUpdated": snapshot.get("lastUpdated"),
             "remainingMatches": remaining_matches,
+            "lastCompletedMatch": last_completed_match,
         }, 200
 
     probabilities = snapshot.get("probabilities", [])
@@ -110,6 +148,7 @@ def build_response_payload() -> tuple[dict[str, Any], int]:
         "teamOrder": TEAM_ORDER,
         "probabilities": probabilities,
         "mappedProbabilities": mapped_probabilities,
+        "lastCompletedMatch": last_completed_match,
     }, 200
 
 
