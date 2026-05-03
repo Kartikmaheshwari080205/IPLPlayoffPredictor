@@ -36,16 +36,26 @@ vector<int> points;
 vector<pair<int, int>> remainingmatches;
 vector<vector<double>> pairwiseprobabilities;
 vector<double> probabilities;
+const double FORM_WEIGHT = 0.35;
 const string PROBABILITY_FILE = "probabilities.txt";
 
 bool IsNumber(const string& s)
 {
-    if(s.empty()) return false;
+    if(s.empty())
+    {
+        return false;
+    }
     int i = (s[0] == '-' ? 1 : 0);
-    if(i == (int)s.size()) return false;
+    if(i == (int)s.size())
+    {
+        return false;
+    }
     for(; i < (int)s.size(); i++)
     {
-        if(!isdigit((unsigned char)s[i])) return false;
+        if(!isdigit((unsigned char)s[i]))
+        {
+            return false;
+        }
     }
     return true;
 }
@@ -128,7 +138,6 @@ string ParseResultToken(const string& resultToken, int t1, int t2, const unorder
         }
         return "__INVALID__";
     }
-
     string normalized = ToUpper(resultToken);
     if(normalized == "NR" || normalized == "DRAW")
     {
@@ -138,7 +147,6 @@ string ParseResultToken(const string& resultToken, int t1, int t2, const unorder
     {
         return "PENDING";
     }
-
     int winner = ParseTeamToken(resultToken, nameToId);
     if(winner == t1)
     {
@@ -297,7 +305,6 @@ bool LoadDataFromFiles(const string& matchesFile, const string& h2hFile)
             return false;
         }
     }
-
     return true;
 }
 
@@ -407,6 +414,30 @@ void BuildRemainingMatches()
 void BuildPairwiseProbabilities()
 {
     pairwiseprobabilities.assign(n, vector<double>(n, 0.0));
+    vector<int> played(n, 0);
+    for(const auto& match : matches)
+    {
+        if(ToUpper(match.result) == "PENDING")
+        {
+            continue;
+        }
+        played[match.team1]++;
+        played[match.team2]++;
+    }
+    vector<double> form(n, 0.5);
+    for(int i=0; i<n; ++i)
+    {
+        if(played[i] == 0)
+        {
+            form[i] = 0.5;
+        }
+        else
+        {
+            form[i] = (double)points[i] / (played[i] * 2.0);
+            if(form[i] < 0.0) form[i] = 0.0;
+            if(form[i] > 1.0) form[i] = 1.0;
+        }
+    }
     for(int i=0; i<n; i++)
     {
         for(int j=0; j<n; j++)
@@ -415,7 +446,10 @@ void BuildPairwiseProbabilities()
             {
                 continue;
             }
-            pairwiseprobabilities[i][j] = (h2h[i][j] + 1.0) / (h2h[i][j] + h2h[j][i] + 2.0);
+            double h2hProb = (h2h[i][j] + 1.0) / (h2h[i][j] + h2h[j][i] + 2.0);
+            double eps = 1e-9;
+            double formProb = (form[i] + eps) / (form[i] + form[j] + 2 * eps);
+            pairwiseprobabilities[i][j] = (1.0 - FORM_WEIGHT) * h2hProb + FORM_WEIGHT * formProb;
         }
     }
     PrintPairwiseProbabilities();
