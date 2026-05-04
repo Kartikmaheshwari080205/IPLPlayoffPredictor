@@ -1,5 +1,5 @@
 # Multi-stage build to keep image size minimal
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
@@ -32,7 +32,9 @@ COPY api_server.py nightly_job.py refresh_ipl_data.py ./
 
 # Copy default configuration files (can be overridden with volumes at runtime)
 COPY matches.txt h2h.txt ./
-COPY ipl_json/ ./ipl_json/
+
+# Create ipl_json directory (will be populated at runtime via volumes or from repository if available)
+RUN mkdir -p ./ipl_json
 
 # Create a non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
