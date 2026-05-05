@@ -47,6 +47,21 @@ jobs:
             echo "No pending matches - skipping update"
           fi
 
+      - name: Install Python dependencies
+        if: steps.check_pending.outputs.pending == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Build predictor for Linux runner
+        if: steps.check_pending.outputs.pending == 'true'
+        run: |
+          if [ -d IPLPlayoffPredictor-backend ]; then
+            cd IPLPlayoffPredictor-backend
+          fi
+          g++ -std=c++17 -O2 predictor.cpp -o predictor
+
       - name: Run nightly job
         if: steps.check_pending.outputs.pending == 'true'
         run: |
